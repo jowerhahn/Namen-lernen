@@ -1,7 +1,7 @@
 /* Namen lernen – Web-App. Alle Daten bleiben im Browser (IndexedDB) auf dem Gerät. */
 (() => {
   'use strict';
-  const VERSION = '0.1.0';
+  const VERSION = '0.1.1';
   const $ = id => document.getElementById(id);
 
   // ---------- Speicher (IndexedDB) ----------
@@ -199,17 +199,23 @@
     const list = Array.isArray(data) ? data : data.photos;
     if (!Array.isArray(list)) throw new Error('Das ist kein Fotopaket.');
     const byKey = new Map(contacts.map(c => [keyOf(c), c]));
-    let matched = 0, unmatched = 0; const changed = [];
+    // Unbekannte Personen werden als neue Kontakte angelegt; so reicht ein Paket ohne CSV.
+    let photos = 0, created = 0; const changed = [];
     for (const p of list) {
-      const c = byKey.get(keyOf(p)) || (p.id && contacts.find(x => x.id === p.id));
-      if (!c || !p.image) { unmatched++; continue; }
-      c.pendingPhoto = await squarePhoto(p.image);
-      c.pendingSource = p.source || null;
-      changed.push(c); matched++;
+      if (!p.first && !p.last) continue;
+      let c = byKey.get(keyOf(p)) || (p.id && contacts.find(x => x.id === p.id));
+      if (!c) {
+        c = { id: newId(), first: p.first || '', last: p.last || '', company: p.company || '', title: p.title || '',
+              photo: null, photoSource: null, pendingPhoto: null, pendingSource: null,
+              box: 1, right: 0, wrong: 0, lastSeen: 0, added: Date.now() };
+        byKey.set(keyOf(c), c); created++;
+      }
+      if (p.image) { c.pendingPhoto = await squarePhoto(p.image); c.pendingSource = p.source || null; photos++; }
+      changed.push(c);
     }
     await dbPutMany(changed);
     await reload();
-    toast(`${matched} Fotos geladen` + (unmatched ? `, ${unmatched} ohne passenden Kontakt` : '') + '. Bitte bestätigen.');
+    toast(`${photos} Fotos geladen` + (created ? `, ${created} neue Kontakte angelegt` : '') + (photos ? '. Bitte bestätigen.' : '.'));
   }
 
   // ---------- Ansichten ----------
@@ -407,7 +413,7 @@
   }
   function startRound() {
     round = buildRound(); if (!round.length) return;
-    pos = 0; results = []; requeued = new Set();
+    pos = 0; results = []; requeued = new Set(); $('toast').classList.add('hidden');
     $('summary').classList.add('hidden'); $('quiz').classList.remove('hidden');
     showCard();
   }
