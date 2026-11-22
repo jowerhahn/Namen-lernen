@@ -45,6 +45,11 @@
   .hidden { display: none; }
   .warn { border-color: var(--bad); }
   small { color: var(--muted); }
+  #live { text-align: center; font-size: 20px; min-height: 28px; color: var(--ink); }
+  .dictate { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+  input[type=text] { font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 10px;
+                     background: var(--bg); color: var(--ink); min-width: 0; }
+  #diag { margin-top: 12px; font: 12px/1.4 ui-monospace, Menlo, monospace; color: var(--muted); word-break: break-word; }
 </style>
 </head>
 <body>
@@ -72,7 +77,16 @@
     <div id="target"></div>
     <button id="mic" aria-label="Sprechen">🎤</button>
     <div id="status">Tippe aufs Mikrofon und sag den Namen.</div>
+    <div id="live"></div>
     <div id="verdict"></div>
+    <div class="dictate">
+      <small>Klappt das Mikrofon oben nicht? Tippe ins Feld, dann auf das Mikrofon der Tastatur, sprich den Namen und tippe auf „Prüfen“.</small>
+      <div class="row" style="margin-top:6px">
+        <input id="typed" type="text" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false" placeholder="Hier diktieren …" style="flex:2">
+        <button class="secondary" id="check" style="flex:1">Prüfen</button>
+      </div>
+    </div>
+    <div id="diag"></div>
     <div class="row">
       <button class="secondary" id="retry">Nochmal</button>
       <button class="secondary" id="next">Weiter</button>
@@ -105,6 +119,7 @@
   $('names').value = store.get('names', DEFAULT).join('\n');
   $('lastOnly').checked = store.get('lastOnly', false);
   if (!SR) $('unsupported').classList.remove('hidden');
+  const standalone = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 
   // ---- Vergleich: normalisieren, Levenshtein, Kölner Phonetik ----
   const norm = s => s.toLowerCase()
@@ -174,39 +189,81 @@
     $('progress').textContent = `Name ${idx + 1} von ${names.length}`;
     $('target').textContent = names[idx];
     $('verdict').textContent = ''; $('verdict').className = '';
+    $('live').textContent = '';
+    $('typed').value = '';
     $('status').textContent = 'Tippe aufs Mikrofon und sag den Namen.';
     lastHeard = null;
   }
 
+  // Diagnose: zeigt, welche Ereignisse die Spracherkennung meldet.
+  let diagLog = [];
+  function diag(msg) {
+    diagLog.push(msg);
+    diagLog = diagLog.slice(-12);
+    $('diag').textContent = 'Diagnose: ' + diagLog.join(' · ');
+  }
+
+  function evaluate(alts, source) {
+    alts = alts.map(a => a.trim()).filter(Boolean);
+    if (!alts.length) return;
+    const ok = matches(names[idx], alts, $('lastOnly').checked);
+    lastHeard = { name: names[idx], heard: alts[0], alts, ok, source };
+    $('status').textContent = `Gehört: „${alts[0]}“`;
+    $('verdict').textContent = ok ? '✓ Erkannt' : '✗ Nicht erkannt';
+    $('verdict').className = ok ? 'ok' : 'no';
+  }
+
+  let silenceTimer = null, pending = [], gotFinal = false;
+
+  function stopListening() {
+    clearTimeout(silenceTimer);
+    if (rec) { try { rec.stop(); } catch {} }
+  }
+
   function listen() {
-    if (!SR) { $('status').textContent = 'Spracherkennung nicht verfügbar (siehe Hinweis oben).'; return; }
-    if (listening) { rec && rec.stop(); return; }
+    if (!SR) { $('status').textContent = 'Spracherkennung nicht verfügbar. Nutze das Diktierfeld unten.'; return; }
+    if (listening) { stopListening(); return; }
+    lastHeard = null; pending = []; gotFinal = false;
+    $('verdict').textContent = ''; $('live').textContent = '';
     rec = new SR();
     rec.lang = 'de-DE';
-    rec.interimResults = false;
+    rec.interimResults = true;   // iOS liefert oft nur Zwischenergebnisse
     rec.maxAlternatives = 5;
     rec.continuous = false;
-    const t0 = performance.now();
-    rec.onstart = () => { listening = true; $('mic').classList.add('listening'); $('status').textContent = 'Ich höre zu …'; };
-    rec.onend = () => { listening = false; $('mic').classList.remove('listening');
-      if (!lastHeard) $('status').textContent = 'Nichts verstanden. Tippe nochmal aufs Mikrofon.'; };
+    ['audiostart', 'soundstart', 'speechstart', 'speechend', 'soundend', 'audioend', 'nomatch']
+      .forEach(ev => rec.addEventListener(ev, () => diag(ev)));
+    rec.onstart = () => { diag('start'); listening = true; $('mic').classList.add('listening');
+      $('status').textContent = 'Ich höre zu … sprich jetzt. Zum Beenden nochmal tippen.'; };
+    rec.onresult = e => {
+      const r = e.results[e.results.length - 1];
+      pending = Array.from(r).map(a => a.transcript);
+      diag(r.isFinal ? 'final' : 'zwischen');
+      $('live').textContent = pending[0] || '';
+      if (r.isFinal) { gotFinal = true; evaluate(pending, 'mikro'); stopListening(); return; }
+      // Nach 1,2 s ohne neues Ergebnis gilt das Zwischenergebnis als Antwort.
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(stopListening, 1200);
+    };
     rec.onerror = e => {
+      diag('fehler:' + e.error);
       const msg = { 'not-allowed': 'Mikrofon nicht erlaubt. Bitte in Safari erlauben.',
+                    'service-not-allowed': 'Spracherkennung gesperrt. Bitte Siri und die Diktierfunktion einschalten oder das Diktierfeld unten nutzen.',
                     'no-speech': 'Nichts gehört. Nochmal versuchen.',
+                    'audio-capture': 'Kein Mikrofon gefunden.',
                     'network': 'Keine Verbindung zur Spracherkennung.' }[e.error] || ('Fehler: ' + e.error);
       $('status').textContent = msg;
     };
-    rec.onresult = e => {
-      const r = e.results[0];
-      const alts = Array.from(r).map(a => a.transcript.trim()).filter(Boolean);
-      const ms = Math.round(performance.now() - t0);
-      const ok = matches(names[idx], alts, $('lastOnly').checked);
-      lastHeard = { name: names[idx], heard: alts[0] || '', alts, ok, ms };
-      $('status').textContent = `Gehört: „${alts[0] || '–'}“`;
-      $('verdict').textContent = ok ? '✓ Erkannt' : '✗ Nicht erkannt';
-      $('verdict').className = ok ? 'ok' : 'no';
+    rec.onend = () => {
+      diag('ende');
+      clearTimeout(silenceTimer);
+      listening = false; $('mic').classList.remove('listening');
+      if (!gotFinal && pending.length) evaluate(pending, 'mikro-zwischen');
+      if (!lastHeard && !$('status').textContent.startsWith('Mikrofon') && !$('status').textContent.startsWith('Spracherkennung'))
+        $('status').textContent = 'Nichts verstanden. Nochmal tippen oder das Diktierfeld unten nutzen.';
     };
-    try { rec.start(); } catch (err) { $('status').textContent = 'Start fehlgeschlagen: ' + err.message; }
+    try { rec.start(); } catch (err) { diag('startfehler'); $('status').textContent = 'Start fehlgeschlagen: ' + err.message; }
+    // Sicherheitsnetz: nach 8 s automatisch beenden.
+    setTimeout(() => { if (listening) stopListening(); }, 8000);
   }
 
   function next() {
@@ -238,9 +295,12 @@
     if (!names.length) return;
     store.set('names', names); store.set('lastOnly', $('lastOnly').checked);
     idx = 0; results = []; show('quiz'); loadName();
+    diagLog = []; diag(standalone ? 'modus:home-bildschirm' : 'modus:safari');
   };
   $('mic').onclick = listen;
   $('retry').onclick = () => { lastHeard = null; $('verdict').textContent = ''; listen(); };
+  $('check').onclick = () => { $('typed').blur(); evaluate([$('typed').value], 'diktat'); };
+  $('typed').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('check').click(); } });
   $('next').onclick = next;
   $('again').onclick = () => show('setup');
 
