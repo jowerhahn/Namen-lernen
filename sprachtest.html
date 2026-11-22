@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Namen lernen – Sprachtest</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --ink: #1d1d1f; --muted: #6e6e73;
+    --line: #e2e2e0; --accent: #0a66c2; --good: #1f8f3a; --bad: #c2410c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111113; --card: #1c1c1f; --ink: #f2f2f2; --muted: #a1a1a6;
+            --line: #2e2e33; --accent: #4c9bff; --good: #3ecf6b; --bad: #ff8a50; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 17px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         padding: env(safe-area-inset-top) 16px 32px; }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 20px 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+          padding: 16px; margin-bottom: 16px; }
+  textarea { width: 100%; min-height: 140px; font: inherit; padding: 10px;
+             border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 12px;
+           padding: 14px 18px; cursor: pointer; }
+  .primary { background: var(--accent); color: #fff; width: 100%; }
+  .secondary { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  .row > * { flex: 1; }
+  #target { font-size: 30px; font-weight: 700; text-align: center; margin: 8px 0 4px; }
+  #progress { text-align: center; color: var(--muted); font-size: 14px; }
+  #mic { width: 96px; height: 96px; border-radius: 50%; display: block; margin: 18px auto 8px;
+         background: var(--accent); color: #fff; font-size: 40px; }
+  #mic.listening { animation: pulse 1s infinite; background: var(--bad); }
+  @keyframes pulse { 50% { transform: scale(1.08); } }
+  #status { text-align: center; min-height: 26px; color: var(--muted); }
+  #verdict { text-align: center; font-size: 22px; font-weight: 700; min-height: 32px; }
+  .ok { color: var(--good); } .no { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .hidden { display: none; }
+  .warn { border-color: var(--bad); }
+  small { color: var(--muted); }
+  #live { text-align: center; font-size: 20px; min-height: 28px; color: var(--ink); }
+  .dictate { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+  input[type=text] { font: inherit; padding: 10px; border: 1px solid var(--line); border-radius: 10px;
+                     background: var(--bg); color: var(--ink); min-width: 0; }
+  #diag { margin-top: 12px; font: 12px/1.4 ui-monospace, Menlo, monospace; color: var(--muted); word-break: break-word; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sprachtest</h1>
+  <p class="lead">Erkennt Safari deine Namen gut genug? Sprich jeden Namen einmal, am Ende siehst du die Trefferquote.</p>
+
+  <div id="unsupported" class="card warn hidden">
+    <strong>Spracherkennung nicht verfügbar.</strong><br>
+    Bitte die Seite in <b>Safari</b> öffnen (nicht in Chrome oder einer anderen App) und unter
+    Einstellungen → Allgemein → Tastatur die <b>Diktierfunktion</b> einschalten.
+  </div>
+
+  <section id="setup" class="card">
+    <label for="names"><strong>Namen zum Testen</strong> <small>(ein Name pro Zeile, am besten 10–20 echte Kontakte)</small></label>
+    <textarea id="names"></textarea>
+    <div class="row">
+      <label><input type="checkbox" id="lastOnly"> Nur Nachname zählt</label>
+    </div>
+    <div class="row"><button class="primary" id="start">Test starten</button></div>
+  </section>
+
+  <section id="quiz" class="card hidden">
+    <div id="progress"></div>
+    <div id="target"></div>
+    <button id="mic" aria-label="Sprechen">🎤</button>
+    <div id="status">Tippe aufs Mikrofon und sag den Namen.</div>
+    <div id="live"></div>
+    <div id="verdict"></div>
+    <div class="dictate">
+      <small>Klappt das Mikrofon oben nicht? Tippe ins Feld, dann auf das Mikrofon der Tastatur, sprich den Namen und tippe auf „Prüfen“.</small>
+      <div class="row" style="margin-top:6px">
+        <input id="typed" type="text" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false" placeholder="Hier diktieren …" style="flex:2">
+        <button class="secondary" id="check" style="flex:1">Prüfen</button>
+      </div>
+    </div>
+    <div id="diag"></div>
+    <div class="row">
+      <button class="secondary" id="retry">Nochmal</button>
+      <button class="secondary" id="next">Weiter</button>
+    </div>
+  </section>
+
+  <section id="result" class="card hidden">
+    <h2 id="score" style="margin-top:0"></h2>
+    <table>
+      <thead><tr><th>Name</th><th>Erkannt</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="row"><button class="primary" id="again">Neuer Test</button></div>
+    <p><small>Schick Claude gern ein Bildschirmfoto dieser Tabelle.</small></p>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const DEFAULT = ['Anna Müller', 'Thomas Schmidt', 'Katharina Meyer', 'Jürgen Weiß', 'Sophie Krüger',
+                   'Mehmet Yılmaz', 'Christoph Hoffmann', 'Lea Schäfer', 'Maximilian Bauer', 'Ines Wagner'];
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  };
+
+  $('names').value = store.get('names', DEFAULT).join('\n');
+  $('lastOnly').checked = store.get('lastOnly', false);
+  if (!SR) $('unsupported').classList.remove('hidden');
+  const standalone = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+
+  // ---- Vergleich: normalisieren, Levenshtein, Kölner Phonetik ----
+  const norm = s => s.toLowerCase()
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/ı/g, 'i').replace(/ł/g, 'l').replace(/ø/g, 'o')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z\s-]/g, ' ').replace(/[-\s]+/g, ' ').trim();
+
+  function lev(a, b) {
+    const m = a.length, n = b.length;
+    if (!m) return n; if (!n) return m;
+    let prev = Array.from({ length: n + 1 }, (_, j) => j);
+    for (let i = 1; i <= m; i++) {
+      const cur = [i];
+      for (let j = 1; j <= n; j++)
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+    return prev[n];
+  }
+  const sim = (a, b) => 1 - lev(a, b) / Math.max(a.length, b.length, 1);
+
+  function koeln(word) {
+    const s = norm(word).replace(/\s/g, '');
+    const v = 'aeijouy';
+    let code = '';
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i], p = s[i - 1] || '', n = s[i + 1] || '';
+      let d = '';
+      if (v.includes(c)) d = '0';
+      else if (c === 'h') d = '';
+      else if (c === 'b') d = '1';
+      else if (c === 'p') d = n === 'h' ? '3' : '1';
+      else if ('dt'.includes(c)) d = 'csz'.includes(n) ? '8' : '2';
+      else if ('fvw'.includes(c)) d = '3';
+      else if ('gkq'.includes(c)) d = '4';
+      else if (c === 'c') {
+        if (i === 0) d = 'ahkloqrux'.includes(n) ? '4' : '8';
+        else d = ('sz'.includes(p) || !'ahkoqux'.includes(n)) ? '8' : '4';
+      }
+      else if (c === 'x') d = 'ckq'.includes(p) ? '8' : '48';
+      else if (c === 'l') d = '5';
+      else if ('mn'.includes(c)) d = '6';
+      else if (c === 'r') d = '7';
+      else if ('sz'.includes(c)) d = '8';
+      code += d;
+    }
+    code = code.replace(/(.)\1+/g, '$1');
+    return code[0] + code.slice(1).replace(/0/g, '');
+  }
+
+  // Liefert true, wenn eine der erkannten Varianten zum Namen passt.
+  function matches(target, heardList, lastOnly) {
+    const tWords = norm(target).split(' ').filter(Boolean);
+    const need = lastOnly ? [tWords.at(-1)] : tWords;
+    return heardList.some(h => {
+      const hWords = norm(h).split(' ').filter(Boolean);
+      return need.every(t => hWords.some(w => w === t || sim(w, t) >= 0.75 || koeln(w) === koeln(t)));
+    });
+  }
+
+  // ---- Ablauf ----
+  let names = [], idx = 0, results = [], rec = null, listening = false, lastHeard = null;
+
+  function show(id) { ['setup', 'quiz', 'result'].forEach(s => $(s).classList.toggle('hidden', s !== id)); }
+
+  function loadName() {
+    $('progress').textContent = `Name ${idx + 1} von ${names.length}`;
+    $('target').textContent = names[idx];
+    $('verdict').textContent = ''; $('verdict').className = '';
+    $('live').textContent = '';
+    $('typed').value = '';
+    $('status').textContent = 'Tippe aufs Mikrofon und sag den Namen.';
+    lastHeard = null;
+  }
+
+  // Diagnose: zeigt, welche Ereignisse die Spracherkennung meldet.
+  let diagLog = [];
+  function diag(msg) {
+    diagLog.push(msg);
+    diagLog = diagLog.slice(-12);
+    $('diag').textContent = 'Diagnose: ' + diagLog.join(' · ');
+  }
+
+  function evaluate(alts, source) {
+    alts = alts.map(a => a.trim()).filter(Boolean);
+    if (!alts.length) return;
+    const ok = matches(names[idx], alts, $('lastOnly').checked);
+    lastHeard = { name: names[idx], heard: alts[0], alts, ok, source };
+    $('status').textContent = `Gehört: „${alts[0]}“`;
+    $('verdict').textContent = ok ? '✓ Erkannt' : '✗ Nicht erkannt';
+    $('verdict').className = ok ? 'ok' : 'no';
+  }
+
+  // Eine einzige Erkennungs-Instanz wiederverwenden: Safari auf dem iPhone bricht
+  // neue Instanzen oft sofort ab („aborted“).
+  let silenceTimer = null, safetyTimer = null, pending = [], gotFinal = false;
+  let session = 0, startedAt = 0, retried = false, userStopped = false;
+
+  function stopListening() {
+    clearTimeout(silenceTimer); clearTimeout(safetyTimer);
+    if (rec && listening) { try { rec.stop(); } catch {} }
+  }
+
+  function setupRec() {
+    rec = new SR();
+    rec.lang = 'de-DE';
+    rec.interimResults = true;   // iOS liefert oft nur Zwischenergebnisse
+    rec.maxAlternatives = 5;
+    rec.continuous = false;
+    ['audiostart', 'speechstart', 'speechend', 'audioend', 'nomatch']
+      .forEach(ev => rec.addEventListener(ev, () => diag(ev)));
+    rec.onstart = () => { diag('start'); listening = true; $('mic').classList.add('listening');
+      $('status').textContent = 'Ich höre zu … sprich jetzt.'; };
+    rec.onresult = e => {
+      const r = e.results[e.results.length - 1];
+      const alts = Array.from(r).map(a => a.transcript.trim()).filter(Boolean);
+      diag(r.isFinal ? 'final' : 'zwischen');
+      if (!alts.length) return;
+      pending = alts;
+      $('live').textContent = alts[0];
+      if (r.isFinal) { gotFinal = true; evaluate(pending, 'mikro'); stopListening(); return; }
+      // Nach 1,2 s ohne neues Ergebnis gilt das Zwischenergebnis als Antwort.
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(stopListening, 1200);
+    };
+    rec.onerror = e => {
+      diag('fehler:' + e.error);
+      rec.lastError = e.error;
+    };
+    rec.onend = () => {
+      diag('ende');
+      clearTimeout(silenceTimer); clearTimeout(safetyTimer);
+      listening = false; $('mic').classList.remove('listening');
+      const err = rec.lastError; rec.lastError = null;
+      if (!gotFinal && pending.length) { evaluate(pending, 'mikro-zwischen'); return; }
+      if (lastHeard) return;
+      // Sofortiger Abbruch ohne Ergebnis: einmal still neu starten.
+      if (err === 'aborted' && !retried && !userStopped && performance.now() - startedAt < 1500) {
+        retried = true; diag('neustart');
+        setTimeout(() => begin(), 250);
+        return;
+      }
+      const msg = { 'not-allowed': 'Mikrofon nicht erlaubt. Bitte in Safari erlauben.',
+                    'service-not-allowed': 'Spracherkennung gesperrt. Bitte Siri und die Diktierfunktion einschalten oder das Diktierfeld unten nutzen.',
+                    'audio-capture': 'Kein Mikrofon gefunden.',
+                    'network': 'Keine Verbindung zur Spracherkennung.' }[err];
+      $('status').textContent = msg || 'Nichts verstanden. Nochmal tippen oder das Diktierfeld unten nutzen.';
+    };
+  }
+
+  function begin() {
+    pending = []; gotFinal = false; userStopped = false;
+    startedAt = performance.now();
+    const my = ++session;
+    try { rec.start(); } catch (err) { diag('startfehler'); $('status').textContent = 'Start fehlgeschlagen. Nochmal tippen.'; return; }
+    clearTimeout(safetyTimer);
+    safetyTimer = setTimeout(() => { if (listening && my === session) stopListening(); }, 8000);
+  }
+
+  function listen() {
+    if (!SR) { $('status').textContent = 'Spracherkennung nicht verfügbar. Nutze das Diktierfeld unten.'; return; }
+    if (listening) { userStopped = true; stopListening(); return; }
+    if (!rec) setupRec();
+    lastHeard = null; retried = false;
+    $('verdict').textContent = ''; $('verdict').className = ''; $('live').textContent = '';
+    begin();
+  }
+
+  function next() {
+    if (listening) { userStopped = true; stopListening(); }
+    results[idx] = lastHeard || { name: names[idx], heard: '', alts: [], ok: false };
+    idx++;
+    if (idx < names.length) loadName(); else finish();
+  }
+
+  function finish() {
+    const hits = results.filter(r => r.ok).length;
+    const pct = Math.round(100 * hits / results.length);
+    $('score').textContent = `${hits} von ${results.length} erkannt (${pct} %)`;
+    $('rows').innerHTML = '';
+    results.forEach(r => {
+      const tr = document.createElement('tr');
+      [r.name, r.alts.length ? r.alts.join(' / ') : '–', r.ok ? '✓' : '✗'].forEach((t, i) => {
+        const td = document.createElement('td'); td.textContent = t;
+        if (i === 2) td.className = r.ok ? 'ok' : 'no';
+        tr.appendChild(td);
+      });
+      $('rows').appendChild(tr);
+    });
+    store.set('lastResult', { at: new Date().toISOString(), pct, results });
+    show('result');
+  }
+
+  $('start').onclick = () => {
+    names = $('names').value.split('\n').map(s => s.trim()).filter(Boolean);
+    if (!names.length) return;
+    store.set('names', names); store.set('lastOnly', $('lastOnly').checked);
+    idx = 0; results = []; show('quiz'); loadName();
+    diagLog = []; diag(standalone ? 'modus:home-bildschirm' : 'modus:safari');
+  };
+  $('mic').onclick = listen;
+  $('retry').onclick = () => { lastHeard = null; $('verdict').textContent = ''; listen(); };
+  $('check').onclick = () => { $('typed').blur(); evaluate([$('typed').value], 'diktat'); };
+  $('typed').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('check').click(); } });
+  $('next').onclick = next;
+  $('again').onclick = () => show('setup');
+
+  window.__test = { norm, koeln, matches, sim };
+})();
+</script>
+</body>
+</html>
