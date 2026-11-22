@@ -213,32 +213,33 @@
     $('verdict').className = ok ? 'ok' : 'no';
   }
 
-  let silenceTimer = null, pending = [], gotFinal = false;
+  // Eine einzige Erkennungs-Instanz wiederverwenden: Safari auf dem iPhone bricht
+  // neue Instanzen oft sofort ab („aborted“).
+  let silenceTimer = null, safetyTimer = null, pending = [], gotFinal = false;
+  let session = 0, startedAt = 0, retried = false, userStopped = false;
 
   function stopListening() {
-    clearTimeout(silenceTimer);
-    if (rec) { try { rec.stop(); } catch {} }
+    clearTimeout(silenceTimer); clearTimeout(safetyTimer);
+    if (rec && listening) { try { rec.stop(); } catch {} }
   }
 
-  function listen() {
-    if (!SR) { $('status').textContent = 'Spracherkennung nicht verfügbar. Nutze das Diktierfeld unten.'; return; }
-    if (listening) { stopListening(); return; }
-    lastHeard = null; pending = []; gotFinal = false;
-    $('verdict').textContent = ''; $('live').textContent = '';
+  function setupRec() {
     rec = new SR();
     rec.lang = 'de-DE';
     rec.interimResults = true;   // iOS liefert oft nur Zwischenergebnisse
     rec.maxAlternatives = 5;
     rec.continuous = false;
-    ['audiostart', 'soundstart', 'speechstart', 'speechend', 'soundend', 'audioend', 'nomatch']
+    ['audiostart', 'speechstart', 'speechend', 'audioend', 'nomatch']
       .forEach(ev => rec.addEventListener(ev, () => diag(ev)));
     rec.onstart = () => { diag('start'); listening = true; $('mic').classList.add('listening');
-      $('status').textContent = 'Ich höre zu … sprich jetzt. Zum Beenden nochmal tippen.'; };
+      $('status').textContent = 'Ich höre zu … sprich jetzt.'; };
     rec.onresult = e => {
       const r = e.results[e.results.length - 1];
-      pending = Array.from(r).map(a => a.transcript);
+      const alts = Array.from(r).map(a => a.transcript.trim()).filter(Boolean);
       diag(r.isFinal ? 'final' : 'zwischen');
-      $('live').textContent = pending[0] || '';
+      if (!alts.length) return;
+      pending = alts;
+      $('live').textContent = alts[0];
       if (r.isFinal) { gotFinal = true; evaluate(pending, 'mikro'); stopListening(); return; }
       // Nach 1,2 s ohne neues Ergebnis gilt das Zwischenergebnis als Antwort.
       clearTimeout(silenceTimer);
@@ -246,27 +247,49 @@
     };
     rec.onerror = e => {
       diag('fehler:' + e.error);
-      const msg = { 'not-allowed': 'Mikrofon nicht erlaubt. Bitte in Safari erlauben.',
-                    'service-not-allowed': 'Spracherkennung gesperrt. Bitte Siri und die Diktierfunktion einschalten oder das Diktierfeld unten nutzen.',
-                    'no-speech': 'Nichts gehört. Nochmal versuchen.',
-                    'audio-capture': 'Kein Mikrofon gefunden.',
-                    'network': 'Keine Verbindung zur Spracherkennung.' }[e.error] || ('Fehler: ' + e.error);
-      $('status').textContent = msg;
+      rec.lastError = e.error;
     };
     rec.onend = () => {
       diag('ende');
-      clearTimeout(silenceTimer);
+      clearTimeout(silenceTimer); clearTimeout(safetyTimer);
       listening = false; $('mic').classList.remove('listening');
-      if (!gotFinal && pending.length) evaluate(pending, 'mikro-zwischen');
-      if (!lastHeard && !$('status').textContent.startsWith('Mikrofon') && !$('status').textContent.startsWith('Spracherkennung'))
-        $('status').textContent = 'Nichts verstanden. Nochmal tippen oder das Diktierfeld unten nutzen.';
+      const err = rec.lastError; rec.lastError = null;
+      if (!gotFinal && pending.length) { evaluate(pending, 'mikro-zwischen'); return; }
+      if (lastHeard) return;
+      // Sofortiger Abbruch ohne Ergebnis: einmal still neu starten.
+      if (err === 'aborted' && !retried && !userStopped && performance.now() - startedAt < 1500) {
+        retried = true; diag('neustart');
+        setTimeout(() => begin(), 250);
+        return;
+      }
+      const msg = { 'not-allowed': 'Mikrofon nicht erlaubt. Bitte in Safari erlauben.',
+                    'service-not-allowed': 'Spracherkennung gesperrt. Bitte Siri und die Diktierfunktion einschalten oder das Diktierfeld unten nutzen.',
+                    'audio-capture': 'Kein Mikrofon gefunden.',
+                    'network': 'Keine Verbindung zur Spracherkennung.' }[err];
+      $('status').textContent = msg || 'Nichts verstanden. Nochmal tippen oder das Diktierfeld unten nutzen.';
     };
-    try { rec.start(); } catch (err) { diag('startfehler'); $('status').textContent = 'Start fehlgeschlagen: ' + err.message; }
-    // Sicherheitsnetz: nach 8 s automatisch beenden.
-    setTimeout(() => { if (listening) stopListening(); }, 8000);
+  }
+
+  function begin() {
+    pending = []; gotFinal = false; userStopped = false;
+    startedAt = performance.now();
+    const my = ++session;
+    try { rec.start(); } catch (err) { diag('startfehler'); $('status').textContent = 'Start fehlgeschlagen. Nochmal tippen.'; return; }
+    clearTimeout(safetyTimer);
+    safetyTimer = setTimeout(() => { if (listening && my === session) stopListening(); }, 8000);
+  }
+
+  function listen() {
+    if (!SR) { $('status').textContent = 'Spracherkennung nicht verfügbar. Nutze das Diktierfeld unten.'; return; }
+    if (listening) { userStopped = true; stopListening(); return; }
+    if (!rec) setupRec();
+    lastHeard = null; retried = false;
+    $('verdict').textContent = ''; $('verdict').className = ''; $('live').textContent = '';
+    begin();
   }
 
   function next() {
+    if (listening) { userStopped = true; stopListening(); }
     results[idx] = lastHeard || { name: names[idx], heard: '', alts: [], ok: false };
     idx++;
     if (idx < names.length) loadName(); else finish();
